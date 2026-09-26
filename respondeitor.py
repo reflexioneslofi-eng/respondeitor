@@ -290,8 +290,7 @@ if st.button("🚀 Ejecutar Respondeitor"):
     
     driver = webdriver.Chrome(
         options=options,
-        service=webdriver.chrome.service.Service("/usr/bin/chromedriver")
-)
+        service=webdriver.chrome.service.Service("/usr/bin/chromedriver"))
 
     # =====================================================
     # LOGIN DYNAMED (automático, igual que Pregunteitor)
