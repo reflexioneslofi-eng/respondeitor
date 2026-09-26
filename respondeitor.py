@@ -287,10 +287,12 @@ if st.button("🚀 Ejecutar Respondeitor"):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
     options.binary_location = "/usr/bin/chromium"
-    
+
     driver = webdriver.Chrome(
         options=options,
-        service=webdriver.chrome.service.Service("/usr/bin/chromedriver"))
+        service=webdriver.chrome.service.Service("/usr/bin/chromedriver")
+    )
+
 
     # =====================================================
     # LOGIN DYNAMED (automático, igual que Pregunteitor)
