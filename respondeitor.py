@@ -3,6 +3,7 @@ import time
 import streamlit as st
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
@@ -39,8 +40,13 @@ NOT_FOUND_TEXT = (
     "I did not find that the information answered my clinical question"
 )
 
-MAX_PARTS = 10          # límite de seguridad por cuestionario
+MAX_PARTS = 10           # límite de seguridad por cuestionario
 MAX_CREDITS = 200        # límite de seguridad de créditos a procesar
+
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 # =========================================================
@@ -51,10 +57,24 @@ email = st.text_input("Email de DynaMed")
 
 password = st.text_input("Contraseña de DynaMed", type="password")
 
+debug = st.checkbox("Modo debug (mostrar capturas de pantalla)", value=True)
+
 
 # =========================================================
 # FUNCIONES AUXILIARES
 # =========================================================
+
+def snap(driver, caption):
+    """Muestra una captura de pantalla en Streamlit (solo en modo debug)."""
+
+    if not debug:
+        return
+
+    try:
+        st.image(driver.get_screenshot_as_png(), caption=caption)
+    except Exception:
+        pass
+
 
 def click_js(driver, elem):
 
@@ -188,15 +208,16 @@ def click_advance_button(driver):
         if e.is_displayed() and e.is_enabled()
     ]
 
-    if not visible_candidates:
-        return False
+    for elem in visible_candidates:
+        if click_action(driver, elem):
+            return True
 
-    return click_action(driver, visible_candidates[0])
+    return False
 
 
 def click_prepare_button(driver):
-    """Busca y pulsa el botón Prepare de un crédito disponible.
-    Devuelve True si se pulsó algún botón."""
+    """Prueba todos los candidatos 'Prepare' visibles hasta que uno
+    funcione (igual que en la versión de Jupyter)."""
 
     candidates = driver.find_elements(
         By.XPATH,
@@ -208,10 +229,43 @@ def click_prepare_button(driver):
         if e.is_displayed() and e.is_enabled()
     ]
 
-    if not visible_candidates:
-        return False
+    for elem in visible_candidates:
+        if click_action(driver, elem):
+            return True
 
-    return click_action(driver, visible_candidates[0])
+    return False
+
+
+def wait_for_questionnaire(driver, handles_before, timeout=20):
+    """Espera a que aparezca el cuestionario. Si se abrió una pestaña
+    nueva, cambia a ella automáticamente."""
+
+    def _ready(d):
+
+        nuevas = [h for h in d.window_handles if h not in handles_before]
+
+        if nuevas:
+            d.switch_to.window(nuevas[-1])
+
+        return "questionnaire" in d.current_url.lower()
+
+    WebDriverWait(driver, timeout).until(_ready)
+
+
+def close_extra_tabs(driver, main_handle):
+    """Cierra todas las pestañas salvo la principal y vuelve a ella."""
+
+    for h in list(driver.window_handles):
+
+        if h != main_handle:
+
+            try:
+                driver.switch_to.window(h)
+                driver.close()
+            except Exception:
+                pass
+
+    driver.switch_to.window(main_handle)
 
 
 def select_all_credits(driver):
@@ -232,10 +286,31 @@ def select_all_credits(driver):
     return False
 
 
+def open_available_credits(driver):
+    """Abre Available Credits, espera a que cargue y selecciona 'All'."""
+
+    driver.get(AVAILABLE_CREDITS_URL)
+
+    WebDriverWait(driver, PAGE_TIMEOUT).until(
+        EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "[data-element='tabPanels']")
+        )
+    )
+
+    time.sleep(2)
+
+    select_all_credits(driver)
+
+    time.sleep(1)
+
+
 def process_one_questionnaire(driver, status):
 
     total_other = 0
     total_not_found = 0
+
+    # Igual que en Jupyter: dar tiempo a que renderice el cuestionario
+    time.sleep(3)
 
     for part in range(1, MAX_PARTS + 1):
 
@@ -282,20 +357,22 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     options = Options()
 
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument(f"--user-agent={USER_AGENT}")
     options.binary_location = "/usr/bin/chromium"
 
     driver = webdriver.Chrome(
         options=options,
-        service=webdriver.chrome.service.Service("/usr/bin/chromedriver")
+        service=Service("/usr/bin/chromedriver")
     )
 
 
     # =====================================================
-    # LOGIN DYNAMED (automático, igual que Pregunteitor)
+    # LOGIN DYNAMED (automático)
     # =====================================================
 
     st.info("Abriendo DynaMed...")
@@ -303,6 +380,8 @@ if st.button("🚀 Ejecutar Respondeitor"):
     driver.get(LOGIN_URL)
 
     time.sleep(5)
+
+    snap(driver, "1. Página inicial de DynaMed")
 
 
     # SIGN IN
@@ -357,6 +436,8 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     except Exception as e:
 
+        snap(driver, "Error: no se encontró el campo de email")
+
         st.error("No se encontró el campo de email.")
 
         st.exception(e)
@@ -398,6 +479,8 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     except Exception as e:
 
+        snap(driver, "Error: no se encontró el campo de contraseña")
+
         st.error("No se encontró el campo de contraseña.")
 
         st.exception(e)
@@ -428,6 +511,8 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     if login_button is None:
 
+        snap(driver, "Error: no se encontró el botón de login")
+
         st.error("No se encontró el botón Continue de login.")
 
         driver.quit()
@@ -438,7 +523,9 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     time.sleep(8)
 
-    st.success("Login realizado correctamente.")
+    snap(driver, "2. Tras el login (¿captcha, MFA o error?)")
+
+    st.success("Login realizado (revisa la captura por si hay captcha o MFA).")
 
 
     # =====================================================
@@ -447,17 +534,13 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     st.info("Abriendo Available Credits...")
 
-    driver.get(AVAILABLE_CREDITS_URL)
-
     try:
 
-        WebDriverWait(driver, PAGE_TIMEOUT).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "[data-element='tabPanels']")
-            )
-        )
+        open_available_credits(driver)
 
     except Exception as e:
+
+        snap(driver, "Error al cargar Available Credits")
 
         st.error("No se pudo cargar la página de Available Credits.")
 
@@ -467,11 +550,9 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
         st.stop()
 
-    time.sleep(2)
+    snap(driver, "3. Available Credits con 'All' seleccionado")
 
-    select_all_credits(driver)
-
-    st.success("Opción 'All' seleccionada.")
+    main_handle = driver.current_window_handle
 
 
     # =====================================================
@@ -490,9 +571,11 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
         status = st.empty()
 
-        prepared = click_prepare_button(driver)
+        handles_before = list(driver.window_handles)
 
-        if not prepared:
+        if not click_prepare_button(driver):
+
+            snap(driver, "No se encontró ningún botón Prepare")
 
             st.write("No quedan más créditos disponibles. Fin.")
 
@@ -502,22 +585,22 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
         try:
 
-            WebDriverWait(driver, 20).until(
-                lambda d: "questionnaire" in d.current_url.lower()
-            )
+            wait_for_questionnaire(driver, handles_before)
 
         except Exception:
+
+            snap(driver, "Tras pulsar Prepare (no se detectó cuestionario)")
 
             status.write(
                 "⚠ No se detectó el cuestionario tras pulsar Prepare. "
                 "Se pasa al siguiente crédito."
             )
 
-            driver.get(AVAILABLE_CREDITS_URL)
-
-            time.sleep(3)
-
-            select_all_credits(driver)
+            try:
+                close_extra_tabs(driver, main_handle)
+                open_available_credits(driver)
+            except Exception:
+                pass
 
             continue
 
@@ -533,23 +616,17 @@ if st.button("🚀 Ejecutar Respondeitor"):
             f"I did not find...: {nf}"
         )
 
-        # Volver a Available Credits para buscar el siguiente
-        driver.get(AVAILABLE_CREDITS_URL)
-
+        # Cerrar pestaña extra (si la hay) y volver a la principal
         try:
-
-            WebDriverWait(driver, PAGE_TIMEOUT).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "[data-element='tabPanels']")
-                )
-            )
-
+            close_extra_tabs(driver, main_handle)
         except Exception:
             pass
 
-        time.sleep(2)
-
-        select_all_credits(driver)
+        # Volver a Available Credits para buscar el siguiente
+        try:
+            open_available_credits(driver)
+        except Exception:
+            pass
 
 
     # =====================================================
