@@ -40,7 +40,7 @@ NOT_FOUND_TEXT = (
     "I did not find that the information answered my clinical question"
 )
 
-MAX_PARTS = 10           # límite de seguridad por cuestionario
+MAX_PARTS = 200          # límite de seguridad por cuestionario (con 'All' hay muchas partes)
 MAX_CREDITS = 200        # límite de seguridad de créditos a procesar
 
 USER_AGENT = (
@@ -120,7 +120,7 @@ def select_other_and_not_found(driver, max_idle_passes=3):
 
     processed = set()
 
-    scroll_step = 150
+    scroll_step = 500
 
     current_y = 0
 
@@ -177,7 +177,7 @@ def select_other_and_not_found(driver, max_idle_passes=3):
 
         driver.execute_script(f"window.scrollTo(0,{current_y});")
 
-        time.sleep(0.25)
+        time.sleep(0.12)
 
         if at_bottom:
 
@@ -308,6 +308,7 @@ def process_one_questionnaire(driver, status):
 
     total_other = 0
     total_not_found = 0
+    finished = False
 
     # Igual que en Jupyter: dar tiempo a que renderice el cuestionario
     time.sleep(3)
@@ -327,15 +328,22 @@ def process_one_questionnaire(driver, status):
 
         if not advanced:
             status.write("  · No hay botón de avance, cuestionario terminado.")
+            finished = True
             break
 
         time.sleep(3)
 
         if "questionnaire" not in driver.current_url.lower():
             status.write("  · ✓ Cuestionario completado.")
+            finished = True
             break
 
-    return total_other, total_not_found
+        status.write(
+            f"  · Parte {part} hecha "
+            f"(Other: {total_other} · I did not find...: {total_not_found})"
+        )
+
+    return total_other, total_not_found, finished
 
 
 # =========================================================
@@ -604,17 +612,24 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
             continue
 
-        o, nf = process_one_questionnaire(driver, status)
+        o, nf, finished = process_one_questionnaire(driver, status)
 
         grand_total_other += o
         grand_total_not_found += nf
 
         total_credits_done += 1
 
-        st.write(
-            f"✓ Crédito completado. Other: {o} · "
-            f"I did not find...: {nf}"
-        )
+        if finished:
+            st.write(
+                f"✓ Cuestionario completado. Other: {o} · "
+                f"I did not find...: {nf}"
+            )
+        else:
+            st.warning(
+                f"⚠ Se alcanzó el máximo de partes ({MAX_PARTS}) sin llegar "
+                f"al final. Other: {o} · I did not find...: {nf}"
+            )
+            snap(driver, "Estado al alcanzar el máximo de partes")
 
         # Cerrar pestaña extra (si la hay) y volver a la principal
         try:
