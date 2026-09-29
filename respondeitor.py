@@ -1,3 +1,5 @@
+import glob
+import os
 import time
 
 import streamlit as st
@@ -43,10 +45,9 @@ NOT_FOUND_TEXT = (
 MAX_PARTS = 200          # límite de seguridad por cuestionario (con 'All' hay muchas partes)
 MAX_CREDITS = 200        # límite de seguridad de créditos a procesar
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+# Perfil persistente: conserva cookies/sesión entre ejecuciones, de modo que
+# DynaMed ve un "dispositivo conocido" y no vuelve a pedir login (ni captcha).
+PROFILE_DIR = os.path.abspath("chrome_profile_dynamed")
 
 
 # =========================================================
@@ -304,6 +305,39 @@ def open_available_credits(driver):
     time.sleep(1)
 
 
+def captcha_present(driver):
+    """Detecta si hay un captcha en la página actual."""
+
+    try:
+        html = driver.page_source.lower()
+    except Exception:
+        return False
+
+    signals = ("recaptcha", "hcaptcha", "captcha", "cf-turnstile")
+
+    return any(sig in html for sig in signals)
+
+
+def is_logged_in(driver, timeout=15):
+    """Comprueba si la sesión guardada en el perfil sigue activa."""
+
+    driver.get(AVAILABLE_CREDITS_URL)
+
+    try:
+
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "[data-element='tabPanels']")
+            )
+        )
+
+        return True
+
+    except Exception:
+
+        return False
+
+
 def process_one_questionnaire(driver, status):
 
     total_other = 0
@@ -369,9 +403,15 @@ if st.button("🚀 Ejecutar Respondeitor"):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(f"--user-agent={USER_AGENT}")
+    options.add_argument(f"--user-data-dir={PROFILE_DIR}")
     options.binary_location = "/usr/bin/chromium"
+
+    # Limpiar bloqueos de un Chrome anterior que no se cerró bien
+    for lock in glob.glob(os.path.join(PROFILE_DIR, "Singleton*")):
+        try:
+            os.remove(lock)
+        except Exception:
+            pass
 
     driver = webdriver.Chrome(
         options=options,
@@ -383,157 +423,178 @@ if st.button("🚀 Ejecutar Respondeitor"):
     # LOGIN DYNAMED (automático)
     # =====================================================
 
-    st.info("Abriendo DynaMed...")
+    st.info("Comprobando sesión guardada...")
 
-    driver.get(LOGIN_URL)
+    already_logged_in = is_logged_in(driver)
 
-    time.sleep(5)
+    if already_logged_in:
 
-    snap(driver, "1. Página inicial de DynaMed")
+        st.success("Sesión activa reutilizada, no hace falta login.")
 
+    else:
 
-    # SIGN IN
+        st.info("Abriendo DynaMed...")
 
-    links = driver.find_elements(By.TAG_NAME, "a")
+        driver.get(LOGIN_URL)
 
-    for link in links:
+        time.sleep(5)
 
-        try:
-
-            if "Sign In" in link.text.strip():
-
-                click_js(driver, link)
-
-                break
-
-        except Exception:
-            pass
-
-    time.sleep(5)
+        snap(driver, "1. Página inicial de DynaMed")
 
 
-    # COOKIES
+        # SIGN IN
 
-    buttons = driver.find_elements(By.TAG_NAME, "button")
+        links = driver.find_elements(By.TAG_NAME, "a")
 
-    for button in buttons:
+        for link in links:
 
-        try:
+            try:
 
-            if button.text.strip() == "Accept":
+                if "Sign In" in link.text.strip():
 
-                click_js(driver, button)
+                    click_js(driver, link)
 
-                time.sleep(2)
+                    break
 
-                break
+            except Exception:
+                pass
 
-        except Exception:
-            pass
-
-
-    # EMAIL
-
-    try:
-
-        username = driver.find_element(By.ID, "username")
-
-        username.clear()
-
-        username.send_keys(email)
-
-    except Exception as e:
-
-        snap(driver, "Error: no se encontró el campo de email")
-
-        st.error("No se encontró el campo de email.")
-
-        st.exception(e)
-
-        driver.quit()
-
-        st.stop()
+        time.sleep(5)
 
 
-    # CONTINUE EMAIL
+        # COOKIES
 
-    buttons = driver.find_elements(By.TAG_NAME, "button")
+        buttons = driver.find_elements(By.TAG_NAME, "button")
 
-    for button in buttons:
+        for button in buttons:
+
+            try:
+
+                if button.text.strip() == "Accept":
+
+                    click_js(driver, button)
+
+                    time.sleep(2)
+
+                    break
+
+            except Exception:
+                pass
+
+
+        # EMAIL
 
         try:
 
-            if button.text.strip() == "Continue":
+            username = driver.find_element(By.ID, "username")
 
-                click_js(driver, button)
+            username.clear()
 
-                break
+            username.send_keys(email)
 
-        except Exception:
-            pass
+        except Exception as e:
 
-    time.sleep(5)
+            snap(driver, "Error: no se encontró el campo de email")
 
+            st.error("No se encontró el campo de email.")
 
-    # PASSWORD
+            st.exception(e)
 
-    try:
+            driver.quit()
 
-        password_field = driver.find_element(By.ID, "password")
-
-        password_field.clear()
-
-        password_field.send_keys(password)
-
-    except Exception as e:
-
-        snap(driver, "Error: no se encontró el campo de contraseña")
-
-        st.error("No se encontró el campo de contraseña.")
-
-        st.exception(e)
-
-        driver.quit()
-
-        st.stop()
+            st.stop()
 
 
-    # LOGIN
+        # CONTINUE EMAIL
 
-    buttons = driver.find_elements(By.TAG_NAME, "button")
+        buttons = driver.find_elements(By.TAG_NAME, "button")
 
-    login_button = None
+        for button in buttons:
 
-    for button in buttons:
+            try:
+
+                if button.text.strip() == "Continue":
+
+                    click_js(driver, button)
+
+                    break
+
+            except Exception:
+                pass
+
+        time.sleep(5)
+
+
+        # PASSWORD
 
         try:
 
-            if button.text.strip() == "Continue":
+            password_field = driver.find_element(By.ID, "password")
 
-                login_button = button
+            password_field.clear()
 
-                break
+            password_field.send_keys(password)
 
-        except Exception:
-            pass
+        except Exception as e:
 
-    if login_button is None:
+            snap(driver, "Error: no se encontró el campo de contraseña")
 
-        snap(driver, "Error: no se encontró el botón de login")
+            st.error("No se encontró el campo de contraseña.")
 
-        st.error("No se encontró el botón Continue de login.")
+            st.exception(e)
 
-        driver.quit()
+            driver.quit()
 
-        st.stop()
+            st.stop()
 
-    click_js(driver, login_button)
 
-    time.sleep(8)
+        # LOGIN
 
-    snap(driver, "2. Tras el login (¿captcha, MFA o error?)")
+        buttons = driver.find_elements(By.TAG_NAME, "button")
 
-    st.success("Login realizado (revisa la captura por si hay captcha o MFA).")
+        login_button = None
+
+        for button in buttons:
+
+            try:
+
+                if button.text.strip() == "Continue":
+
+                    login_button = button
+
+                    break
+
+            except Exception:
+                pass
+
+        if login_button is None:
+
+            snap(driver, "Error: no se encontró el botón de login")
+
+            st.error("No se encontró el botón Continue de login.")
+
+            driver.quit()
+
+            st.stop()
+
+        click_js(driver, login_button)
+
+        time.sleep(8)
+
+        snap(driver, "2. Tras el login (¿captcha, MFA o error?)")
+
+        if captcha_present(driver):
+
+            st.error(
+                "DynaMed ha pedido un captcha. No se puede resolver en "
+                "modo headless. Espera unos minutos y vuelve a intentarlo."
+            )
+
+            driver.quit()
+
+            st.stop()
+
+        st.success("Login realizado (revisa la captura por si hay captcha o MFA).")
 
 
     # =====================================================
