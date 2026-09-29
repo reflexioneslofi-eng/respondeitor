@@ -45,6 +45,10 @@ NOT_FOUND_TEXT = (
 MAX_PARTS = 200          # límite de seguridad por cuestionario (con 'All' hay muchas partes)
 MAX_CREDITS = 200        # límite de seguridad de créditos a procesar
 
+# Poner a True para reutilizar sesión con perfil persistente (experimental).
+# Por defecto False: se comporta como Pregunteitor (login limpio cada vez).
+REUSE_SESSION = False
+
 # Perfil persistente: conserva cookies/sesión entre ejecuciones, de modo que
 # DynaMed ve un "dispositivo conocido" y no vuelve a pedir login (ni captcha).
 PROFILE_DIR = os.path.abspath("chrome_profile_dynamed")
@@ -306,16 +310,33 @@ def open_available_credits(driver):
 
 
 def captcha_present(driver):
-    """Detecta si hay un captcha en la página actual."""
+    """Detecta un captcha VISIBLE (no basta con que la página cargue
+    el script de reCAPTCHA en segundo plano, eso es normal)."""
 
     try:
-        html = driver.page_source.lower()
+
+        for f in driver.find_elements(By.TAG_NAME, "iframe"):
+
+            title = (f.get_attribute("title") or "").lower()
+
+            if "challenge" in title and f.is_displayed():
+                return True
+
+        body = driver.find_element(By.TAG_NAME, "body").text.lower()
+
+        signals = (
+            "verify you are human",
+            "not a robot",
+            "select all images",
+            "security check",
+            "captcha",
+        )
+
+        return any(sig in body for sig in signals)
+
     except Exception:
+
         return False
-
-    signals = ("recaptcha", "hcaptcha", "captcha", "cf-turnstile")
-
-    return any(sig in html for sig in signals)
 
 
 def is_logged_in(driver, timeout=15):
@@ -399,19 +420,22 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     options = Options()
 
-    options.add_argument("--headless=new")
+    options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument(f"--user-data-dir={PROFILE_DIR}")
     options.binary_location = "/usr/bin/chromium"
 
-    # Limpiar bloqueos de un Chrome anterior que no se cerró bien
-    for lock in glob.glob(os.path.join(PROFILE_DIR, "Singleton*")):
-        try:
-            os.remove(lock)
-        except Exception:
-            pass
+    if REUSE_SESSION:
+
+        options.add_argument(f"--user-data-dir={PROFILE_DIR}")
+
+        # Limpiar bloqueos de un Chrome anterior que no se cerró bien
+        for lock in glob.glob(os.path.join(PROFILE_DIR, "Singleton*")):
+            try:
+                os.remove(lock)
+            except Exception:
+                pass
 
     driver = webdriver.Chrome(
         options=options,
@@ -425,7 +449,7 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
     st.info("Comprobando sesión guardada...")
 
-    already_logged_in = is_logged_in(driver)
+    already_logged_in = is_logged_in(driver) if REUSE_SESSION else False
 
     if already_logged_in:
 
@@ -581,7 +605,13 @@ if st.button("🚀 Ejecutar Respondeitor"):
 
         time.sleep(8)
 
-        snap(driver, "2. Tras el login (¿captcha, MFA o error?)")
+        try:
+            st.image(
+                driver.get_screenshot_as_png(),
+                caption="2. Estado tras el login"
+            )
+        except Exception:
+            pass
 
         if captcha_present(driver):
 
